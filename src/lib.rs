@@ -6,8 +6,13 @@ use std::sync::OnceLock;
 
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
-use windows::Win32::Foundation::HINSTANCE;
+use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, SetWindowsHookExA, MSG, WINDOWS_HOOK_ID,
+};
 
 // https://samrambles.com/guides/window-hacking-with-rust/creating-a-window-with-rust/index.html#refactoring-create_window
 
@@ -47,6 +52,37 @@ fn setup_logging() {
     tracing::info!("Subscriber Installed");
 }
 
+fn setup_events() {
+    unsafe {
+        let module_handle = GetModuleHandleA(None).unwrap();
+        let thread_id = GetCurrentThreadId();
+        SetWindowsHookExA(
+            WINDOWS_HOOK_ID(3),
+            Some(event_monitor),
+            module_handle,
+            thread_id,
+        )
+        .unwrap();
+    }
+}
+
+#[tracing::instrument]
+unsafe extern "system" fn event_monitor(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    tracing::debug!("test");
+
+    if code == 0 && lparam.0 != 0 {
+        let ptr = lparam.0 as *const MSG;
+        let msg = &(*ptr);
+        tracing::debug!(?msg)
+    } else if code > 0 {
+        tracing::debug!("unkown code, skipping processing");
+    } else {
+        tracing::debug!("code < 0, skipping processing");
+    }
+
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
 fn load_library() -> libloading::Library {
     unsafe { libloading::Library::new(DLL_NAME).unwrap() }
 }
@@ -74,7 +110,7 @@ pub mod export {
     };
 
     macro_rules! instrument_symbol {
-        ($name:ident( $($arg:ident: $at:ty),* $(,)?)) => {
+        ($name:ident( $($arg:ident: $at:ty),* $(,)?) $(, $inject:stmt)?) => {
             #[no_mangle]
             #[instrument]
             pub extern "C" fn $name($($arg: $at),*) {
@@ -83,18 +119,21 @@ pub mod export {
                         library().get(stringify!($name).as_bytes()).unwrap();
                     func($($arg),*);
                 }
+                $($inject())?;
                 tracing::trace!("ret=()");
             }
         };
-        ($name:ident( $($arg:ident: $at:ty),* $(,)?) -> $rt:ty) => {
+        ($name:ident( $($arg:ident: $at:ty),* $(,)?) -> $rt:ty $(, $inject:stmt)?) => {
             #[no_mangle]
             #[instrument]
             pub extern "C" fn $name($($arg: $at),*) -> $rt {
-                    let ret = unsafe {
+                let ret = unsafe {
                     let func: Symbol<unsafe extern "C" fn($($at),*) -> $rt> =
                         library().get(stringify!($name).as_bytes()).unwrap();
                     func($($arg),*)
                 };
+                $($inject;)?
+
                 tracing::trace!(?ret);
                 ret
             }
@@ -140,7 +179,8 @@ pub mod export {
         device: *mut *mut ID3D11Device,
         obtained_feature_level: *mut D3D_FEATURE_LEVEL,
         immediate_context: *mut *mut ID3D11DeviceContext,
-    ) -> HRESULT);
+    ) -> HRESULT,
+    super::setup_events());
 
     instrument_symbol!(D3D11CoreCreateLayeredDevice(arg1: i64, arg2: i64, arg3: i64, arg4: i64, arg5: i64) -> i64);
     instrument_symbol!(D3D11CoreGetLayeredDeviceSize(arg1: i64, arg2: i64) -> u64);

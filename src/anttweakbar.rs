@@ -2,7 +2,8 @@
     non_camel_case_types,
     non_snake_case,
     unused_variables,
-    non_upper_case_globals
+    non_upper_case_globals,
+    dead_code
 )]
 
 use std::ffi::{c_char, c_int, c_uint};
@@ -65,3 +66,45 @@ pub type TwGraphAPI = c_uint;
 pub type TwMouseAction = c_uint;
 pub type TwMouseButtonID = c_uint;
 pub type TwErrorHandler = Option<unsafe extern "C" fn(errorMessage: *const c_char)>;
+
+pub const ETwKeyModifier_TW_KMOD_NONE: TwKeyModifier = 0;
+pub const ETwKeyModifier_TW_KMOD_SHIFT: TwKeyModifier = 3;
+pub const ETwKeyModifier_TW_KMOD_CTRL: TwKeyModifier = 192;
+pub const ETwKeyModifier_TW_KMOD_ALT: TwKeyModifier = 256;
+pub const ETwKeyModifier_TW_KMOD_META: TwKeyModifier = 3072;
+pub type TwKeyModifier = c_uint;
+
+pub const KeySpecial_TW_KEY_BACKSPACE: KeySpecial = 8;
+pub const KeySpecial_TW_KEY_TAB: KeySpecial = 9;
+pub const KeySpecial_TW_KEY_CLEAR: KeySpecial = 12;
+pub const KeySpecial_TW_KEY_RETURN: KeySpecial = 13;
+pub const KeySpecial_TW_KEY_PAUSE: KeySpecial = 19;
+pub const KeySpecial_TW_KEY_ESCAPE: KeySpecial = 27;
+pub const KeySpecial_TW_KEY_SPACE: KeySpecial = 32;
+pub const KeySpecial_TW_KEY_DELETE: KeySpecial = 127;
+pub const KeySpecial_TW_KEY_UP: KeySpecial = 273;
+pub const KeySpecial_TW_KEY_DOWN: KeySpecial = 274;
+pub const KeySpecial_TW_KEY_RIGHT: KeySpecial = 275;
+pub const KeySpecial_TW_KEY_LEFT: KeySpecial = 276;
+pub const KeySpecial_TW_KEY_INSERT: KeySpecial = 277;
+pub const KeySpecial_TW_KEY_HOME: KeySpecial = 278;
+pub const KeySpecial_TW_KEY_END: KeySpecial = 279;
+pub const KeySpecial_TW_KEY_PAGE_UP: KeySpecial = 280;
+pub const KeySpecial_TW_KEY_PAGE_DOWN: KeySpecial = 281;
+pub const KeySpecial_TW_KEY_F1: KeySpecial = 282;
+pub const KeySpecial_TW_KEY_F2: KeySpecial = 283;
+pub const KeySpecial_TW_KEY_F3: KeySpecial = 284;
+pub const KeySpecial_TW_KEY_F4: KeySpecial = 285;
+pub const KeySpecial_TW_KEY_F5: KeySpecial = 286;
+pub const KeySpecial_TW_KEY_F6: KeySpecial = 287;
+pub const KeySpecial_TW_KEY_F7: KeySpecial = 288;
+pub const KeySpecial_TW_KEY_F8: KeySpecial = 289;
+pub const KeySpecial_TW_KEY_F9: KeySpecial = 290;
+pub const KeySpecial_TW_KEY_F10: KeySpecial = 291;
+pub const KeySpecial_TW_KEY_F11: KeySpecial = 292;
+pub const KeySpecial_TW_KEY_F12: KeySpecial = 293;
+pub const KeySpecial_TW_KEY_F13: KeySpecial = 294;
+pub const KeySpecial_TW_KEY_F14: KeySpecial = 295;
+pub const KeySpecial_TW_KEY_F15: KeySpecial = 296;
+pub const KeySpecial_TW_KEY_LAST: KeySpecial = 297;
+pub type KeySpecial = c_uint;
