@@ -1,17 +1,22 @@
 mod anttweakbar;
 
+use std::ffi::{c_int, c_short, c_void};
 use std::fs;
 use std::io::BufWriter;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
+use windows::core::s;
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::System::Memory::{
+    VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
+};
 use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExA, MSG, WINDOWS_HOOK_ID,
+    CallNextHookEx, SetWindowsHookExA, MSG, WINDOWS_HOOK_ID, WM_KEYDOWN, WM_KEYUP,
 };
 
 // https://samrambles.com/guides/window-hacking-with-rust/creating-a-window-with-rust/index.html#refactoring-create_window
@@ -19,8 +24,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 // Interface to wrapped library.
 static LIBRARY: OnceLock<libloading::Library> = OnceLock::new();
 static mut WRITER_GUARD: Option<WorkerGuard> = None;
+static KEY_STATES: Mutex<[bool; 0x100]> = Mutex::new([false; 0x100]);
+static LAST_STATES: Mutex<[bool; 0x100]> = Mutex::new([false; 0x100]);
 
 const DLL_NAME: &str = "d3d11enb.dll";
+
+const GETASYNCKEYSTATE_OFFSET: usize = 0x107458;
 
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
@@ -66,14 +75,29 @@ fn setup_events() {
     }
 }
 
-#[tracing::instrument]
 unsafe extern "system" fn event_monitor(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    tracing::debug!("test");
-
     if code == 0 && lparam.0 != 0 {
         let ptr = lparam.0 as *const MSG;
         let msg = &(*ptr);
-        tracing::debug!(?msg)
+        match msg.message {
+            WM_KEYDOWN => {
+                tracing::debug!("KEYDOWN: {} ({})", msg.wParam.0, msg.lParam.0);
+                let keycode = msg.wParam.0;
+                if keycode < 0x100 {
+                    let mut states = KEY_STATES.lock().unwrap();
+                    states[msg.wParam.0] = true;
+                }
+            }
+            WM_KEYUP => {
+                tracing::debug!("KEYUP: {} ({})", msg.wParam.0, msg.lParam.0);
+                let keycode = msg.wParam.0;
+                if keycode < 0x100 {
+                    let mut states = KEY_STATES.lock().unwrap();
+                    states[msg.wParam.0] = false;
+                }
+            }
+            _ => (),
+        }
     } else if code > 0 {
         tracing::debug!("unkown code, skipping processing");
     } else {
@@ -83,12 +107,78 @@ unsafe extern "system" fn event_monitor(code: i32, wparam: WPARAM, lparam: LPARA
     CallNextHookEx(None, code, wparam, lparam)
 }
 
+#[tracing::instrument]
+unsafe extern "system" fn user_get_async_key_state(key: c_int) -> c_short {
+    if key >= 0x100 {
+        return 0;
+    }
+
+    let states = KEY_STATES.lock().unwrap();
+    let mut last_states = LAST_STATES.lock().unwrap();
+
+    if states[key as usize] {
+        let mut ret_val = 1 << (c_short::BITS - 1);
+
+        // Check if keypress is new.
+        if !last_states[key as usize] {
+            tracing::debug!("New key press");
+            ret_val |= 1;
+            last_states[key as usize] = true;
+        }
+
+        ret_val
+    } else {
+        last_states[key as usize] = false;
+        0
+    }
+}
+
 fn load_library() -> libloading::Library {
-    unsafe { libloading::Library::new(DLL_NAME).unwrap() }
+    let library = unsafe { libloading::Library::new(DLL_NAME).unwrap() };
+
+    // Inject custom function reloc.
+    let module = unsafe { GetModuleHandleA(s!("d3d11enb.dll")).unwrap() };
+    let base_addr = module.0;
+    tracing::info!("Base address: {:x}", base_addr);
+
+    // This is the 64-bit address of the relocated function.
+    let func_addr = base_addr as usize + GETASYNCKEYSTATE_OFFSET;
+    let new_addr = user_get_async_key_state as *const c_void as usize;
+    tracing::info!("Writing new GetAsyncKeyState pointer: {:x}", new_addr);
+    write_progmem(func_addr, &new_addr.to_ne_bytes());
+
+    let addr = read_progmem(func_addr, 8);
+    tracing::debug!("new data {:x}: {:02x?}", func_addr, addr);
+    library
 }
 
 fn library() -> &'static libloading::Library {
     LIBRARY.get_or_init(load_library)
+}
+
+fn write_progmem(addr: usize, data: &[u8]) {
+    let mut oldprotect = PAGE_PROTECTION_FLAGS(0);
+    unsafe {
+        VirtualProtect(
+            addr as *const c_void,
+            data.len(),
+            PAGE_EXECUTE_READWRITE,
+            &mut oldprotect as *mut PAGE_PROTECTION_FLAGS,
+        )
+        .unwrap();
+        std::ptr::copy_nonoverlapping(data.as_ptr(), addr as *mut u8, data.len());
+        VirtualProtect(
+            addr as *const c_void,
+            data.len(),
+            oldprotect,
+            &mut oldprotect as *mut PAGE_PROTECTION_FLAGS,
+        )
+        .unwrap();
+    }
+}
+
+fn read_progmem<'a>(addr: usize, len: usize) -> &'a [u8] {
+    unsafe { std::slice::from_raw_parts(addr as *const u8, len) }
 }
 
 pub mod export {
